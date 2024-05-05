@@ -28,13 +28,25 @@ class Trans(torch.nn.Module):
         transformer_hidden_dropout_rate = 0.1
 
         # 嵌入编码层
-        self.emb = Embeddings(input_dim_drug,
+        self.embDrug = Embeddings(input_dim_drug,
+                              transformer_emb_size_drug,
+                              50,
+                              transformer_dropout_rate)
+
+        self.embSide = Embeddings(input_dim_drug,
                               transformer_emb_size_drug,
                               50,
                               transformer_dropout_rate)
 
         # Transformer层
-        self.encoder = Encoder_MultipleLayers(transformer_n_layer_drug,
+        self.encoderDrug = Encoder_MultipleLayers(transformer_n_layer_drug,
+                                              transformer_emb_size_drug,
+                                              transformer_intermediate_size_drug,
+                                              transformer_num_attention_heads_drug,
+                                              transformer_attention_probs_dropout,
+                                              transformer_hidden_dropout_rate)
+
+        self.encoderSide = Encoder_MultipleLayers(transformer_n_layer_drug,
                                               transformer_emb_size_drug,
                                               transformer_intermediate_size_drug,
                                               transformer_num_attention_heads_drug,
@@ -82,8 +94,8 @@ class Trans(torch.nn.Module):
         DrugMask = DrugMask.long().to(self.device)
         DrugMask = DrugMask.unsqueeze(1).unsqueeze(2)
         DrugMask = (1.0 - DrugMask) * -10000.0
-        emb = self.emb(Drug)
-        encoded_layers = self.encoder(emb.float(), DrugMask.float(), False)
+        emb = self.embDrug(Drug)
+        encoded_layers = self.encoderDrug(emb.float(), DrugMask.float(), False)
         x_d = encoded_layers
 
         # 副作用-子结构编码
@@ -91,8 +103,8 @@ class Trans(torch.nn.Module):
         SEMsak = SEMsak.long().to(self.device)
         SEMsak = SEMsak.unsqueeze(1).unsqueeze(2)
         SEMsak = (1.0 - SEMsak) * -10000.0
-        embE = self.emb(SE)
-        encoded_layers = self.encoder(embE.float(), SEMsak.float(), False)
+        embE = self.embSide(SE)
+        encoded_layers = self.encoderSide(embE.float(), SEMsak.float(), False)
         x_e = encoded_layers
 
         if self.CrossAttention:

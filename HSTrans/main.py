@@ -47,106 +47,11 @@ def Extract_positive_negative_samples(DAL, addition_negative_number=''):
     return addition_negative_sample, final_positive_sample, final_negtive_sample
 
 
-# 损失函数
 def loss_fun(output, label):
     output = output.to('cuda')
     label = label.to('cuda')
     loss = torch.sum((output - label) ** 2)
     return loss
-
-
-# 数据预处理：提取有效子结构
-def identify_sub():
-    raw_frequency = scipy.io.loadmat(raw_file)
-    raw = raw_frequency['R']
-    mask_mat = scipy.io.loadmat(mask_mat_file)
-    drug_dict, drug_smile = load_drug_smile(SMILES_file)
-
-    # 获得SMILE-sub序号
-    sub_dict = {}
-    for i in range(750):
-        drug_sub, mask = drug2emb_encoder(drug_smile[i])
-        drug_sub = drug_sub.tolist()
-        sub_dict[i] = drug_sub
-
-    # 矩阵，i-副作用，j-子结构，对于每一个副作用，遍历所有药物，如果有fre，sij+=fre
-    rawT = raw.T
-    SE_sub = np.zeros((994, 2686))
-    for j in range(994):
-        nonzero_columns = np.where(rawT[j] != 0)
-        print(j)
-        for i in nonzero_columns[0]:
-            fre = rawT[j][i]
-            # i是指药物的编号
-            for k in sub_dict[i]:
-                if k == 0:
-                    continue
-                SE_sub[j][k] += 1
-
-    # np.save("SE_sub_1.npy", SE_sub)
-
-    SE_sub = np.load("SE_sub_1.npy")
-
-    # 总和
-    n = np.sum(SE_sub)
-    # 计算行和
-    SE_sum = np.sum(SE_sub, axis=1)
-    SE_p = SE_sum / n
-    # 计算列和
-    Sub_sum = np.sum(SE_sub, axis=0)
-    Sub_p = Sub_sum / n
-
-    SE_sub_p = SE_sub / n
-
-    freq = np.zeros((994, 2686))
-    for i in range(994):
-        for j in range(2686):
-            freq[i][j] = (SE_sub_p[i][j] - SE_p[i] * Sub_p[j]) / (sqrt((SE_p[i] * Sub_p[j] / n)
-                                                                       * (1 - SE_p[i]) *
-                                                                       (1 - Sub_p[j])))
-    # 存储结果的列表
-    result = []
-
-    # 遍历每一行
-    for row in freq:
-        # 存储大于1.2的值的列表
-        values_gt_1_2 = []
-        # 检查每个元素是否大于1.2
-        for value in row:
-            if value > 1.96:
-                # 如果大于1.2，则添加到结果列表中
-                values_gt_1_2.append(value)
-        # 将当前行的结果添加到总结果列表中
-        result.append(values_gt_1_2)
-
-    print("Result:", result)
-
-
-    l = []
-    SE_sub_index = np.zeros((994, 50))
-    for i in range(994):
-        if i == 665:
-            j = 1
-        if i == 979:
-            j = 3
-        k = 0
-        sorted_indices = np.argsort(freq[i])[::-1]
-        filtered_indices = sorted_indices[freq[i][sorted_indices] > 1.96]
-        for j in filtered_indices:
-            if k < 50:
-                SE_sub_index[i][k] = j
-                k = k + 1
-            else:
-                continue
-
-    np.save("data/SE_sub_index_50.npy", SE_sub_index)
-
-    SE_sub_index = np.load("data/SE_sub_index_50.npy")
-
-    SE_sub_mask = SE_sub_index
-    SE_sub_mask[SE_sub_mask > 0] = 1
-    np.save("data/SE_sub_mask_50.npy", SE_sub_mask)
-    i = 1
 
 
 def trainfun(model, device, train_loader, optimizer, epoch, log_interval, test_loader):
@@ -325,8 +230,6 @@ def main(training_generator, testing_generator, modeling, lr, num_epoch, weight_
     print('\tall AUC: {:.5f}\tall AUPR: {:.5f}\tdrug AUC: {:.5f}\tdrug AUPR: {:.5f}\tdrug Precise: {:.5f}\tRecall: {:.5f}\tdrug ACC: {:.5f}'.format(
             result[4], result[5],
             result[6], result[7], result[8], result[9], result[10]))
-
-
 
 
 class Data_Encoder(data.Dataset):
