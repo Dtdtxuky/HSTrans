@@ -54,6 +54,85 @@ def loss_fun(output, label):
     return loss
 
 
+def identify_sub(data, k):
+    print('正在提取有效子结构')
+    drug_smile = [item[1] for item in data]
+    side_id = [item[0] for item in data]
+    labels = [item[2] for item in data]
+
+    # 获得SMILE-sub序号
+    sub_dict = {}
+    for i in range(len(drug_smile)):
+        drug_sub, mask = drug2emb_encoder(drug_smile[i])
+        drug_sub = drug_sub.tolist()
+        sub_dict[i] = drug_sub
+
+    # 暂存成文件
+    with open(f'data/sub/my_dict_{k}.pkl', 'wb') as f:
+        pickle.dump(sub_dict, f)
+    # 读取文件
+    with open(f'data/sub/my_dict_{k}.pkl', 'rb') as f:
+        sub_dict = pickle.load(f)
+
+    SE_sub = np.zeros((994, 2686))
+    for j in range(len(drug_smile)):
+        sideID = side_id[j]
+        label = float(labels[j])
+        for k in sub_dict[j]:
+            if k == 0:
+                continue
+            SE_sub[int(sideID)][int(k)] += label
+
+    np.save(f"data/sub/SE_sub_{k}.npy", SE_sub)
+    SE_sub = np.load(f"data/sub/SE_sub_{k}.npy", allow_pickle=True)
+
+    # 总和
+    n = np.sum(SE_sub)
+    # 计算行和
+    SE_sum = np.sum(SE_sub, axis=1)
+    SE_p = SE_sum / n
+    # 计算列和
+    Sub_sum = np.sum(SE_sub, axis=0)
+    Sub_p = Sub_sum / n
+
+    SE_sub_p = SE_sub / n
+
+    freq = np.zeros((994, 2686))
+    for i in range(994):
+        print(i)
+        for j in range(2686):
+            freq[i][j] = ((SE_sub_p[i][j] - SE_p[i] * Sub_p[j]) / (sqrt((SE_p[i] * Sub_p[j] / n)
+                                                                        * (1 - SE_p[i]) *
+                                                                        (1 - Sub_p[j])))) + 1e-5
+    np.save(f"data/sub/freq_{k}.npy", freq)
+    freq = np.load(f"data/sub/freq_{k}.npy", allow_pickle=True)
+    non_nan_values = freq[~np.isnan(freq)]
+    percentile_95 = np.percentile(non_nan_values, 95)
+    print("95% 分位点:", percentile_95)
+
+    l = []
+    SE_sub_index = np.zeros((994, 50))
+    for i in range(994):
+        k = 0
+        sorted_indices = np.argsort(freq[i])[::-1]
+        filtered_indices = sorted_indices[freq[i][sorted_indices] > percentile_95]
+        l.append(len(filtered_indices))
+        for j in filtered_indices:
+            if k < 50:
+                SE_sub_index[i][k] = j
+                k = k + 1
+            else:
+                continue
+
+    np.save(f"data/sub/SE_sub_index_50_{k}.npy", SE_sub_index)
+    SE_sub_index = np.load(f"data/sub/SE_sub_index_50_{k}.npy")
+
+    SE_sub_mask = SE_sub_index
+    SE_sub_mask[SE_sub_mask > 0] = 1
+    np.save(f"data/sub/SE_sub_mask_50_{k}.npy", SE_sub_mask)
+    np.save("len_sub", l)
+
+
 def trainfun(model, device, train_loader, optimizer, epoch, log_interval, test_loader):
     # 确定训练集的数量
     print('Training on {} samples...'.format(len(train_loader.dataset)))
@@ -178,15 +257,13 @@ def evaluate(model, device, test_loader):
     return auc_all, aupr_all, drugAUC, drugAUPR, precision, recall, accuracy
 
 
-def main(training_generator, testing_generator, modeling, lr, num_epoch, weight_decay,log_interval, cuda_name,
-         save_model,k):
+def main(training_generator, testing_generator, modeling, lr, num_epoch, weight_decay, log_interval, cuda_name,
+         save_model, k):
     print('\n=======================================================================================')
     print('model: ', modeling.__name__)
     print('Learning rate: ', lr)
     print('Epochs: ', num_epoch)
     print('weight_decay: ', weight_decay)
-
-
 
     model_st = modeling.__name__
     train_losses = []
@@ -199,22 +276,33 @@ def main(training_generator, testing_generator, modeling, lr, num_epoch, weight_
     # 模型初始化
     model = modeling().to(device)
 
+    # 计算模型的参数总数
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f'Total parameters: {total_params}')
+
     # 创建优化器
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     for epoch in range(num_epoch):
         train_loss = trainfun(model=model, device=device,
                               train_loader=training_generator,
-                              optimizer=optimizer, epoch=epoch + 1, log_interval=log_interval, test_loader=testing_generator)
+                              optimizer=optimizer, epoch=epoch + 1, log_interval=log_interval,
+                              test_loader=testing_generator)
         train_losses.append(train_loss)
 
-        checkpointsFolder = 'checkpoints/'
-        torch.save(model.state_dict(), checkpointsFolder + str(epoch))
+        if epoch % 50 == 0:
+            checkpointsFolder = 'checkpoints/'
+            torch.save(model.state_dict(), checkpointsFolder + f'{k}' + str(epoch))
 
     print("正在预测")
     test_labels, test_preds = predict(model=model, device=device, test_loader=testing_generator)
 
-    ret_test = [rmse(test_labels, test_preds),MAE(test_labels, test_preds)]
+
+    np.save(f'predictResult/total_labels_{k}.npy', test_labels)
+    np.save(f'predictResult/total_preds_{k}.npy', test_preds)
+
+
+    ret_test = [rmse(test_labels, test_preds), MAE(test_labels, test_preds)]
 
     test_pearsons, test_rMSE, test_spearman, test_MAE = ret_test[1], ret_test[2], ret_test[3], ret_test[4]
 
@@ -227,24 +315,23 @@ def main(training_generator, testing_generator, modeling, lr, num_epoch, weight_
 
     print('Test:\nPearson: {:.5f}\trMSE: {:.5f}\tSpearman: {:.5f}\tMAE: {:.5f}'.format(result[0], result[1], result[2],
                                                                                        result[3]))
-    print('\tall AUC: {:.5f}\tall AUPR: {:.5f}\tdrug AUC: {:.5f}\tdrug AUPR: {:.5f}\tdrug Precise: {:.5f}\tRecall: {:.5f}\tdrug ACC: {:.5f}'.format(
+    print(
+        '\tall AUC: {:.5f}\tall AUPR: {:.5f}\tdrug AUC: {:.5f}\tdrug AUPR: {:.5f}\tdrug Precise: {:.5f}\tRecall: {:.5f}\tdrug ACC: {:.5f}'.format(
             result[4], result[5],
             result[6], result[7], result[8], result[9], result[10]))
 
 
 class Data_Encoder(data.Dataset):
-    def __init__(self, list_IDs, labels, df_dti):
-
+    def __init__(self, list_IDs, labels, df_dti, k):
         self.labels = labels
         self.list_IDs = list_IDs
         self.df = df_dti
+        self.k = k
 
     def __len__(self):
-
         return len(self.list_IDs)
 
     def __getitem__(self, index):
-
         index = self.list_IDs[index]
         d = self.df.iloc[index]['Drug_smile']
         s = int(self.df.iloc[index]['SE_id'])
@@ -253,8 +340,8 @@ class Data_Encoder(data.Dataset):
         d_v, input_mask_d = drug2emb_encoder(d)
 
         # 副作用的子结构是读取出来的
-        SE_index = np.load("data/SE_sub_index_50.npy").astype(int)
-        SE_mask = np.load("data/SE_sub_mask_50.npy")
+        SE_index = np.load(f"data/sub/SE_sub_index_50_35.npy").astype(int)
+        SE_mask = np.load(f"data/sub/SE_sub_mask_50_35.npy")
         s_v = SE_index[s, :]
         input_mask_s = SE_mask[s, :]
         y = self.labels[index]
@@ -267,10 +354,11 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=int, required=False, default=0)
     parser.add_argument('--lr', type=float, required=False, default=1e-4, help='Learning rate')
     parser.add_argument('--wd', type=float, required=False, default=0.01, help='weight_decay')
-    parser.add_argument('--epoch', type=int, required=False, default=300, help='Number of epoch')
+    parser.add_argument('--epoch', type=int, required=False, default=200, help='Number of epoch')
     parser.add_argument('--log_interval', type=int, required=False, default=40, help='Log interval')
     parser.add_argument('--cuda_name', type=str, required=False, default='cpu', help='Cuda')
-    parser.add_argument('--dim', type=int, required=False, default=200, help='features dimensions of drugs and side effects')
+    parser.add_argument('--dim', type=int, required=False, default=200,
+                        help='features dimensions of drugs and side effects')
     parser.add_argument('--save_model', action='store_true', default=True, help='save model and features')
 
     args = parser.parse_args()
@@ -282,7 +370,6 @@ if __name__ == '__main__':
     log_interval = args.log_interval
     cuda_name = args.cuda_name
     save_model = args.save_model
-
 
     #  获取正负样本
     addition_negative_sample, final_positive_sample, final_negative_sample = Extract_positive_negative_samples(
@@ -304,6 +391,8 @@ if __name__ == '__main__':
     data_neg_y = []
     data_neg = []
     drug_dict, drug_smile = load_drug_smile(SMILES_file)
+
+
     for i in range(addition_negative_sample.shape[0]):
         data_neg_x.append((addition_negative_sample[i, 1], addition_negative_sample[i, 0]))
         data_neg_y.append((int(float(addition_negative_sample[i, 2]))))
@@ -317,9 +406,10 @@ if __name__ == '__main__':
     fold = 1
     kfold = StratifiedKFold(10, random_state=1, shuffle=True)
 
-
     params = {'batch_size': 128,
               'shuffle': True}
+
+    identify_sub(data, 0)
 
     for k, (train, test) in enumerate(kfold.split(data_x, data_y)):
         data_train = np.array(data)[train]
@@ -330,8 +420,8 @@ if __name__ == '__main__':
         df_test = pd.DataFrame(data=data_test.tolist(), columns=['SE_id', 'Drug_smile', 'Label'])
 
         # 创建数据集和数据加载器
-        training_set = Data_Encoder(df_train.index.values, df_train.Label.values, df_train)
-        testing_set = Data_Encoder(df_test.index.values, df_test.Label.values, df_test)
+        training_set = Data_Encoder(df_train.index.values, df_train.Label.values, df_train, k)
+        testing_set = Data_Encoder(df_test.index.values, df_test.Label.values, df_test, k)
 
         training_generator = torch.utils.data.DataLoader(training_set, **params)
         testing_generator = torch.utils.data.DataLoader(testing_set, **params)
