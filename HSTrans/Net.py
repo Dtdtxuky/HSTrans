@@ -53,12 +53,7 @@ class Trans(torch.nn.Module):
                                               transformer_attention_probs_dropout,
                                               transformer_hidden_dropout_rate)
 
-        self.crossAttentionencoder = Encoder_MultipleLayers(transformer_n_layer_drug,
-                                              transformer_emb_size_drug,
-                                              transformer_intermediate_size_drug,
-                                              transformer_num_attention_heads_drug,
-                                              transformer_attention_probs_dropout,
-                                              transformer_hidden_dropout_rate)
+
         # 位置编码层
         self.position_embeddings = nn.Embedding(500, 200)
 
